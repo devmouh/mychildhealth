@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backendcode
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SECRET_KEY=production-secure-django-secret-key-change-me-in-prod
+      - DJANGO_DEBUG=True
+      - DJANGO_ALLOWED_HOSTS=*
+      - DJANGO_CORS_ALLOW_ALL=True
+    volumes:
+      - ./backendcode:/app
+    restart: always

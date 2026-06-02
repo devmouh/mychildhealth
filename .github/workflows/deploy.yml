@@ -1,0 +1,63 @@
+name: Zamil CI/CD Workflow
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+
+      - name: Install Python Dependencies
+        run: |
+          pip install -r backendcode/requirements.txt
+
+      - name: Django System Checks
+        run: |
+          python backendcode/manage.py check
+        env:
+          DJANGO_SECRET_KEY: "ci-cd-security-mock-key"
+          DJANGO_DEBUG: "True"
+
+  frontend-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Flutter Packages
+        run: flutter pub get
+
+      - name: Check Code Formatting
+        run: flutter format --set-exit-if-changed lib/
+
+      - name: Analyze Code Quality
+        run: flutter analyze lib/

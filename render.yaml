@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: zamil-backend
+    env: python
+    buildCommand: "pip install -r backendcode/requirements.txt && python backendcode/manage.py collectstatic --noinput && python backendcode/manage.py migrate"
+    startCommand: "gunicorn --directory backendcode hospital.wsgi:application"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "*"
+      - key: DJANGO_CORS_ALLOW_ALL
+        value: "True"
