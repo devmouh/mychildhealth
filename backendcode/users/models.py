@@ -105,6 +105,7 @@ class Patients(models.Model):
     groupe_sanguin        = models.CharField(max_length=5, choices=BLOOD_GROUP_CHOICES, blank=True)
     telephone_parent      = models.CharField(max_length=20, blank=True)
     email                 = models.EmailField(blank=True)
+    photo                 = models.ImageField(upload_to='patients/photos/', null=True, blank=True)
     date_creation_dossier = models.DateField(auto_now_add=True, null=True)
 
     class Meta:

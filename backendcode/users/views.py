@@ -120,7 +120,6 @@ class PasswordResetRequestView(APIView):
         from .utils import send_email
 
         email = request.data.get('email', '').strip()
-        # Always return 200 — never reveal whether email exists
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
@@ -133,7 +132,11 @@ class PasswordResetRequestView(APIView):
             expires_at=timezone.now() + timedelta(hours=1)
         )
         send_email(user.email, token)
-        return Response({'detail': 'Si cet email existe, un lien a été envoyé.'})
+        return Response({
+            'detail': 'Si cet email existe, un lien a été envoyé.',
+            'token': token,
+            'email': email,
+        })
 
 
 class PasswordResetConfirmView(APIView):

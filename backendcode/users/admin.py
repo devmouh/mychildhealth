@@ -119,9 +119,28 @@ class SecretaireAdmin(admin.ModelAdmin):
 
 @admin.register(Patients)
 class PatientsAdmin(admin.ModelAdmin):
-    list_display  = ('first_name', 'last_name', 'birth_date', 'gender', 'groupe_sanguin', 'parent')
+    list_display  = ('first_name', 'last_name', 'birth_date', 'gender', 'groupe_sanguin', 'parent', 'photo_tag')
     list_filter   = ('gender', 'groupe_sanguin')
     search_fields = ('first_name', 'last_name', 'parent__username')
+    readonly_fields = ('photo_tag',)
+    fieldsets = (
+        (None, {
+            'fields': ('parent', 'first_name', 'last_name', 'birth_date', 'gender', 'groupe_sanguin')
+        }),
+        ('Contact', {
+            'fields': ('telephone_parent', 'email')
+        }),
+        ('Photo', {
+            'fields': ('photo', 'photo_tag')
+        }),
+    )
+
+    def photo_tag(self, obj):
+        if obj.photo:
+            return '<img src="%s" style="max-height:100px;max-width:100px" />' % obj.photo.url
+        return '—'
+    photo_tag.short_description = 'Aperçu'
+    photo_tag.allow_tags = True
 
     def has_view_permission(self, request, obj=None):
         return True  # secretaire can VIEW patients

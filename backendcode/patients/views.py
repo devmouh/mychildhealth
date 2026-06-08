@@ -30,6 +30,7 @@ class PatientDashboardView(APIView):
                 'gender':                c.gender,
                 'groupe_sanguin':        c.groupe_sanguin,
                 'date_creation_dossier': c.date_creation_dossier,
+                'photo_url':             request.build_absolute_uri(c.photo.url) if c.photo else None,
             }
             for c in children
         ]
@@ -54,6 +55,7 @@ class PatientProfileView(APIView):
                 'telephone_parent':      c.telephone_parent,
                 'email':                 c.email,
                 'date_creation_dossier': c.date_creation_dossier,
+                'photo_url':             request.build_absolute_uri(c.photo.url) if c.photo else None,
                 'parent_phone':          request.user.phone,
                 'parent_email':          request.user.email,
             }
@@ -90,7 +92,9 @@ class MyAppointmentsView(APIView):
             {
                 'id':           a.id,
                 'patient':      f"{a.patient.first_name} {a.patient.last_name}",
+                'patient_id':   a.patient.id,
                 'doctor':       f"Dr. {a.doctor.user.last_name} {a.doctor.user.first_name}",
+                'doctor_id':    a.doctor.id,
                 'date_rdv':     a.date_rdv,
                 'heure':        a.heure,
                 'motif':        a.motif,
@@ -106,7 +110,61 @@ class MyAppointmentsView(APIView):
         })
 
 
-# ─── Book appointment — list doctors ─────────────────────────────────────────
+# ─── Doctor availability — time slots ──────────────────────────────────────
+
+class DoctorAvailabilityView(APIView):
+    permission_classes = [IsAuthenticated, IsParent]
+
+    def get(self, request, doctor_id):
+        doctor = get_object_or_404(Doctors, id=doctor_id, actif=True)
+
+        date_str = str(request.query_params.get('date', '')).strip()
+        if not date_str:
+            date_str = str(now().date())
+
+        # Parse horaire_travail to get start/end hours
+        work_hours = doctor.horaire_travail.strip() if doctor.horaire_travail else '9:00-15:00'
+        try:
+            import re
+            times = re.findall(r'\d{1,2}:\d{2}', work_hours)
+            if len(times) >= 2:
+                start_h = int(times[0].split(':')[0])
+                end_h = int(times[1].split(':')[0])
+            else:
+                start_h, end_h = 9, 15
+        except (ValueError, IndexError):
+            start_h, end_h = 9, 15
+
+        # Generate hourly slots
+        all_slots = []
+        for h in range(start_h, end_h):
+            label = f"{h}:00-{h+1}:00"
+            all_slots.append(label)
+
+        # Fetch existing appointments for this doctor on this date
+        existing = Appointment.objects.filter(
+            doctor=doctor,
+            date_rdv__date=date_str,
+        ).exclude(status='CANCELLED')
+
+        booked_times = set()
+        for a in existing:
+            t = a.date_rdv.time()
+            booked_times.add(f"{t.hour}:00-{t.hour+1}:00")
+
+        slots = []
+        for slot in all_slots:
+            slots.append({
+                'time': slot,
+                'is_available': slot not in booked_times,
+            })
+
+        return Response({
+            'doctor_id': doctor_id,
+            'date': date_str,
+            'horaire_travail': work_hours,
+            'slots': slots,
+        })
 
 class BookAppointmentView(APIView):
     permission_classes = [IsAuthenticated, IsParent]
@@ -210,3 +268,52 @@ class ConfirmBookAppointmentView(APIView):
             {'detail': 'Rendez-vous réservé avec succès.', 'appointment_id': appointment.id},
             status=status.HTTP_201_CREATED
         )
+
+
+class CancelPatientAppointmentView(APIView):
+    permission_classes = [IsAuthenticated, IsParent]
+
+    def patch(self, request, appointment_id):
+        appointment = get_object_or_404(Appointment, id=appointment_id, patient__parent=request.user)
+        if appointment.status in ('COMPLETED', 'CANCELLED'):
+            return Response(
+                {'detail': 'Impossible d\'annuler ce rendez-vous.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        appointment.status = 'CANCELLED'
+        appointment.save()
+        return Response({'detail': 'Rendez-vous annulé avec succès.'})
+
+
+class ReschedulePatientAppointmentView(APIView):
+    permission_classes = [IsAuthenticated, IsParent]
+
+    def patch(self, request, appointment_id):
+        appointment = get_object_or_404(Appointment, id=appointment_id, patient__parent=request.user)
+        if appointment.status in ('COMPLETED', 'CANCELLED'):
+            return Response(
+                {'detail': 'Impossible de modifier ce rendez-vous.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        date_value = str(request.data.get('date', '')).strip()
+        time_value = str(request.data.get('time', '')).strip()
+
+        if not date_value or not time_value:
+            return Response(
+                {'detail': 'Veuillez fournir une date et une heure.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if date_value < str(now().date()):
+            return Response(
+                {'detail': 'Impossible de réserver une date passée.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        from datetime import datetime
+        new_date = datetime.strptime(f"{date_value} {time_value}", "%Y-%m-%d %H:%M")
+        appointment.date_rdv = new_date
+        appointment.status = 'PENDING'
+        appointment.save()
+        return Response({'detail': 'Rendez-vous reprogrammé avec succès.', 'new_date': date_value, 'new_time': time_value})

@@ -1,7 +1,10 @@
+import os
+from django.http import FileResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework import status
 
 from users.permissions import IsDoctor, IsParent
 from .models import Document
@@ -53,3 +56,28 @@ class DeleteDocumentView(APIView):
         doc.fichier.delete(save=False)
         doc.delete()
         return Response({'detail': 'Document supprimé.'}, status=204)
+
+
+class DownloadDocumentView(APIView):
+    """GET /api/documents/<id>/download/ — serve file as attachment"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            doc = Document.objects.get(pk=pk)
+        except Document.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Permission check: parent can only download own children's docs
+        if request.user.role == 'PARENT' and doc.patient.parent != request.user:
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not doc.fichier:
+            return Response({'detail': 'No file on record.'}, status=status.HTTP_404_NOT_FOUND)
+
+        response = FileResponse(
+            doc.fichier.open('rb'),
+            as_attachment=True,
+            filename=os.path.basename(doc.nom_fichier),
+        )
+        return response

@@ -10,6 +10,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 from consultations.models import Appointment, Consultation, Diagnostic, Traitement
 from users.models import Patients, Specialty, Doctors, TraceAction
+from medical_history.models import Allergie, Antecedent
 from users.permissions import IsDoctor
 from notifications.utils import create_notification
 
@@ -23,6 +24,19 @@ def _get_doctor(user):
 
 def _log(user, action, table=""):
     TraceAction.objects.create(user=user, action=action, table_concernee=table)
+
+
+def _safe_address(user):
+    try:
+        a = user.address
+        return {
+            'address_line': a.address_line or '',
+            'region':       a.region or '',
+            'city':         a.city or '',
+            'code_postal':  a.code_postal or '',
+        }
+    except Exception:
+        return {}
 
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -63,12 +77,7 @@ class DoctorProfileView(APIView):
             'actif':           doctor.actif,
             'photo':           request.build_absolute_uri(doctor.photo.url) if doctor.photo else None,
             'specialty':       {'id': doctor.specialty.id, 'name': doctor.specialty.name} if doctor.specialty else None,
-            'address': {
-                'address_line': getattr(user.address, 'address_line', ''),
-                'region':       getattr(user.address, 'region', ''),
-                'city':         getattr(user.address, 'city', ''),
-                'code_postal':  getattr(user.address, 'code_postal', ''),
-            } if getattr(user, 'address', None) else {},
+            'address': _safe_address(user),
             'specialities': [{'id': s.id, 'name': s.name} for s in specialities],
         })
 
@@ -81,12 +90,15 @@ class DoctorProfileView(APIView):
         user.last_name  = data.get('last_name',  user.last_name).strip()
         user.phone      = data.get('phone', getattr(user, 'phone', '')).strip()
 
-        if getattr(user, 'address', None):
-            user.address.address_line = data.get('address_line', user.address.address_line).strip()
-            user.address.region       = data.get('region',       user.address.region).strip()
-            user.address.city         = data.get('city',         user.address.city).strip()
-            user.address.code_postal  = data.get('code_postal',  user.address.code_postal).strip()
-            user.address.save()
+        try:
+            addr = user.address
+            addr.address_line = data.get('address_line', addr.address_line).strip()
+            addr.region       = data.get('region',       addr.region).strip()
+            addr.city         = data.get('city',         addr.city).strip()
+            addr.code_postal  = data.get('code_postal',  addr.code_postal).strip()
+            addr.save()
+        except Exception:
+            pass
 
         spec_id = str(data.get('speciality', '')).strip()
         if spec_id:
@@ -179,20 +191,44 @@ class DoctorConsultationsView(APIView):
             Consultation.objects
             .filter(appointment__doctor=doctor)
             .select_related('appointment__patient')
+            .prefetch_related('diagnostics', 'traitements')
             .order_by('-date_consultation')
         )
-        data = [
-            {
+        data = []
+        for c in consultations:
+            data.append({
                 'id':                c.id,
+                'appointment_id':    c.appointment_id,
                 'patient':           f"{c.appointment.patient.first_name} {c.appointment.patient.last_name}",
                 'date_consultation': c.date_consultation,
                 'poids':             c.poids,
                 'taille':            c.taille,
                 'temperature':       c.temperature,
                 'observation':       c.observation,
-            }
-            for c in consultations
-        ]
+                'diagnostics': [
+                    {
+                        'id':                  d.id,
+                        'nom_maladie':         d.nom_maladie,
+                        'type_maladie':        d.type_maladie,
+                        'type_label':          d.get_type_maladie_display(),
+                        'gravite':             d.gravite,
+                        'gravite_label':       d.get_gravite_display(),
+                        'commentaire_medical': d.commentaire_medical,
+                        'explication_parent':  d.explication_parent,
+                    }
+                    for d in c.diagnostics.all()
+                ],
+                'traitements': [
+                    {
+                        'id':           t.id,
+                        'medicament':   t.medicament,
+                        'dose':         t.dose,
+                        'duree':        t.duree,
+                        'instructions': t.instructions,
+                    }
+                    for t in c.traitements.all()
+                ],
+            })
         return Response({'consultations': data})
 
 
@@ -260,7 +296,6 @@ class DoctorPatientsView(APIView):
 
     def get(self, request):
         doctor = _get_doctor(request.user)
-        # Get all patients who have appointments with this doctor
         patient_ids = (
             Appointment.objects
             .filter(doctor=doctor)
@@ -268,8 +303,21 @@ class DoctorPatientsView(APIView):
             .distinct()
         )
         patients = Patients.objects.filter(id__in=patient_ids)
-        data = [
-            {
+        data = []
+        for p in patients:
+            allergies_qs = Allergie.objects.filter(patient=p)
+            allergies = [f"{a.nom} ({a.get_reaction_display()})" for a in allergies_qs]
+
+            antecedents_qs = Antecedent.objects.filter(patient=p)
+            medical_history = [f"{a.get_type_antecedent_display()}: {a.description}" for a in antecedents_qs]
+
+            latest_consult = Consultation.objects.filter(
+                appointment__patient=p, appointment__doctor=doctor
+            ).order_by('-date_consultation').first()
+            poids = str(latest_consult.poids) if latest_consult and latest_consult.poids else ''
+            taille = str(latest_consult.taille) if latest_consult and latest_consult.taille else ''
+
+            data.append({
                 'id':                p.id,
                 'first_name':        p.first_name,
                 'last_name':         p.last_name,
@@ -280,16 +328,14 @@ class DoctorPatientsView(APIView):
                 'telephone_parent':  p.telephone_parent,
                 'email':             p.email,
                 'parent_name':       f"{p.parent.first_name} {p.parent.last_name}" if p.parent else '',
-                'parent_relation':   'Mère' if p.parent and p.parent.gender == 'F' else 'Père',
-                'allergies':         [],
-                'medical_history':   [],
-                'poids':             '',
-                'taille':            '',
+                'parent_relation':   'Mère' if p.parent and getattr(p.parent, 'gender', '') == 'F' else 'Père',
+                'allergies':         allergies,
+                'medical_history':   medical_history,
+                'poids':             poids,
+                'taille':            taille,
                 'status':            'ACTIVE',
-                'photo_url':         None,
-            }
-            for p in patients
-        ]
+                'photo_url':         request.build_absolute_uri(p.photo.url) if p.photo else None,
+            })
         return Response({'patients': data})
 
 
@@ -324,3 +370,16 @@ class DoctorChangePasswordView(APIView):
         update_session_auth_hash(request, user)
         _log(user, 'CHANGE_PASSWORD', 'Users')
         return Response({'detail': 'Mot de passe changé avec succès.'})
+
+
+# ─── Verify Identity (for profile edit) ──────────────────────────────
+
+class DoctorVerifyIdentityView(APIView):
+    permission_classes = [IsAuthenticated, IsDoctor]
+
+    def post(self, request):
+        password = request.data.get('password', '')
+        if not password:
+            return Response({'valid': False}, status=status.HTTP_400_BAD_REQUEST)
+        valid = request.user.check_password(password)
+        return Response({'valid': valid})

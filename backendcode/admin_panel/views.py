@@ -1,14 +1,16 @@
+from datetime import date, datetime
+
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q
 
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from users.models import Users, Doctors, Patients, TraceAction
+from users.models import Users, Doctors, Patients, TraceAction, Secretaire
 from consultations.models import Appointment
-from users.permissions import IsAdmin
+from users.permissions import IsAdmin, IsAdminOrSecretaire
 from .serializers import (
     AdminUserSerializer, AdminUserCreateSerializer,
     AdminDoctorSerializer, AdminDoctorCreateSerializer,
@@ -251,8 +253,20 @@ class AdminDoctorToggleActiveView(APIView):
 
 # ─── Patients ─────────────────────────────────────────────────────────────────
 
+class AdminSpecialtyListView(APIView):
+    """GET /api/admin-panel/specialties/ — list all specialties."""
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request):
+        specialties = Specialty.objects.all().values('id', 'name')
+        return Response(list(specialties))
+
+
 class AdminPatientListView(APIView):
-    """GET /api/admin/patients/ — list all patients."""
+    """
+    GET  /api/admin-panel/patients/  — list all patients
+    POST /api/admin-panel/patients/  — create a new patient
+    """
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
@@ -267,14 +281,49 @@ class AdminPatientListView(APIView):
 
         return Response(AdminPatientSerializer(patients, many=True).data)
 
+    def post(self, request):
+        from .serializers import AdminPatientCreateSerializer
+        serializer = AdminPatientCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        patient = serializer.save()
+        _log(request.user, 'CREATE_PATIENT', 'Patients')
+        return Response(AdminPatientSerializer(patient).data, status=status.HTTP_201_CREATED)
+
 
 class AdminPatientDetailView(APIView):
-    """GET /api/admin/patients/<id>/ — get one patient's full info."""
+    """
+    GET   /api/admin-panel/patients/<id>/  — get one patient
+    PATCH /api/admin-panel/patients/<id>/  — update patient
+    """
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request, patient_id):
         patient = get_object_or_404(Patients, id=patient_id)
         return Response(AdminPatientSerializer(patient).data)
+
+    def patch(self, request, patient_id):
+        patient = get_object_or_404(Patients, id=patient_id)
+        serializer = AdminPatientCreateSerializer(patient, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        _log(request.user, 'UPDATE_PATIENT', 'Patients')
+        return Response(AdminPatientSerializer(patient).data)
+
+
+class AdminNotificationListView(APIView):
+    """GET /api/admin-panel/notifications/ — list ALL notifications (admin only)."""
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request):
+        from notifications.models import Notification
+        from notifications.serializers import NotificationSerializer
+        qs = Notification.objects.select_related('recipient').order_by('-created_at')
+        unread = request.query_params.get('unread')
+        if unread == 'true':
+            qs = qs.filter(is_read=False)
+        return Response(NotificationSerializer(qs, many=True).data)
 
 
 # ─── Appointments ─────────────────────────────────────────────────────────────
@@ -350,3 +399,202 @@ class AdminAppointmentStatusView(APIView):
         appointment.save()
         _log(request.user, f'UPDATE_APPOINTMENT_STATUS:{new_status}', 'Appointment')
         return Response({'detail': 'Statut mis à jour.', 'status': new_status})
+
+
+# ─── Secretary Panel ───────────────────────────────────────────────────────────
+
+class SecDashboardView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def get(self, request):
+        today = date.today()
+        total_appointments      = Appointment.objects.count()
+        today_appointments_qs   = Appointment.objects.filter(date_rdv__date=today)
+        pending_appointments    = Appointment.objects.filter(status='PENDING').count()
+        total_patients          = Patients.objects.count()
+        total_doctors           = Doctors.objects.filter(actif=True).count()
+
+        today_appts_data = []
+        for a in today_appointments_qs.select_related('doctor__user', 'doctor__specialty', 'patient').order_by('-date_rdv')[:10]:
+            today_appts_data.append({
+                'id':           a.id,
+                'patient_name': str(a.patient),
+                'doctor_name':  f"{a.doctor.user.last_name} {a.doctor.user.first_name}",
+                'specialty':    a.doctor.specialty.name if a.doctor.specialty else '',
+                'date_rdv':     a.date_rdv.isoformat() if a.date_rdv else '',
+                'motif':        a.motif or '',
+                'status':       a.status,
+            })
+
+        recent = Appointment.objects.select_related('doctor__user', 'doctor__specialty', 'patient').order_by('-date_rdv')[:10]
+        recent_data = []
+        for a in recent:
+            recent_data.append({
+                'id':           a.id,
+                'patient_name': str(a.patient),
+                'doctor_name':  f"{a.doctor.user.last_name} {a.doctor.user.first_name}",
+                'specialty':    a.doctor.specialty.name if a.doctor.specialty else '',
+                'date_rdv':     a.date_rdv.isoformat() if a.date_rdv else '',
+                'motif':        a.motif or '',
+                'status':       a.status,
+            })
+
+        return Response({
+            'stats': {
+                'total_appointments':  total_appointments,
+                'today_appointments':  today_appointments_qs.count(),
+                'pending_appointments': pending_appointments,
+                'total_patients':      total_patients,
+                'total_doctors':       total_doctors,
+            },
+            'today_appointments':    today_appts_data,
+            'recent_appointments':   recent_data,
+        })
+
+
+class SecAppointmentListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def get(self, request):
+        qs = Appointment.objects.select_related(
+            'doctor__user', 'doctor__specialty', 'patient'
+        ).order_by('-date_rdv')
+
+        patient = request.query_params.get('patient', '').strip()
+        doctor  = request.query_params.get('doctor', '').strip()
+        dt      = request.query_params.get('date', '').strip()
+        st      = request.query_params.get('status', '').strip()
+
+        if patient:
+            qs = qs.filter(
+                Q(patient__first_name__icontains=patient) |
+                Q(patient__last_name__icontains=patient)
+            )
+        if doctor:
+            qs = qs.filter(
+                Q(doctor__user__last_name__icontains=doctor) |
+                Q(doctor__user__first_name__icontains=doctor)
+            )
+        if dt:
+            qs = qs.filter(date_rdv__date=dt)
+        if st:
+            qs = qs.filter(status=st)
+
+        data = []
+        for a in qs:
+            data.append({
+                'id':           a.id,
+                'patient_name': str(a.patient),
+                'doctor_name':  f"{a.doctor.user.last_name} {a.doctor.user.first_name}",
+                'specialty':    a.doctor.specialty.name if a.doctor.specialty else '',
+                'date_rdv':     a.date_rdv.isoformat() if a.date_rdv else '',
+                'motif':        a.motif or '',
+                'status':       a.status,
+            })
+        return Response({'appointments': data})
+
+
+class SecAppointmentConfirmView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def patch(self, request, appointment_id):
+        a = get_object_or_404(Appointment, id=appointment_id)
+        if a.status == 'COMPLETED':
+            return Response({'detail': 'Cannot modify completed appointment.'}, status=400)
+        a.status = 'CONFIRMED'
+        a.save()
+        _log(request.user, f'SEC_CONFIRM_APPOINTMENT:{appointment_id}', 'Appointment')
+        return Response({'detail': 'Appointment confirmed.'})
+
+
+class SecAppointmentCancelView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def patch(self, request, appointment_id):
+        a = get_object_or_404(Appointment, id=appointment_id)
+        if a.status == 'COMPLETED':
+            return Response({'detail': 'Cannot cancel completed appointment.'}, status=400)
+        a.status = 'CANCELLED'
+        a.save()
+        _log(request.user, f'SEC_CANCEL_APPOINTMENT:{appointment_id}', 'Appointment')
+        return Response({'detail': 'Appointment cancelled.'})
+
+
+class SecAppointmentCreateView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def post(self, request):
+        from consultations.serializers import AppointmentSerializer
+        ser = AppointmentSerializer(data=request.data)
+        if ser.is_valid():
+            appt = ser.save()
+            _log(request.user, f'SEC_CREATE_APPOINTMENT:{appt.id}', 'Appointment')
+            return Response({'detail': 'Appointment created.', 'id': appt.id}, status=201)
+        return Response(ser.errors, status=400)
+
+
+class SecPatientListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def get(self, request):
+        search = request.query_params.get('search', '').strip()
+        qs = Patients.objects.select_related('parent').all()
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)
+            )
+        data = []
+        for p in qs:
+            data.append({
+                'id':               p.id,
+                'first_name':       p.first_name,
+                'last_name':        p.last_name,
+                'photo':            str(p.photo_url) if p.photo_url else '',
+                'birth_date':       str(p.birth_date) if p.birth_date else '',
+                'gender':           p.gender or '',
+                'groupe_sanguin':   p.groupe_sanguin or '',
+                'telephone_parent': p.parent.phone if p.parent else '',
+                'parent_name':      f"{p.parent.first_name} {p.parent.last_name}" if p.parent else '',
+            })
+        return Response(data)
+
+
+class SecDoctorListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def get(self, request):
+        qs = Doctors.objects.select_related('user', 'specialty').filter(actif=True)
+        data = []
+        for d in qs:
+            data.append({
+                'id':              d.id,
+                'photo':           str(d.photo) if d.photo else '',
+                'horaire_travail': d.horaire_travail or '',
+                'ville':           d.ville or '',
+                'bio':             d.bio or '',
+                'user': {
+                    'id':         d.user.id,
+                    'first_name': d.user.first_name,
+                    'last_name':  d.user.last_name,
+                    'phone':      getattr(d.user, 'phone', ''),
+                },
+                'specialty': {
+                    'id':   d.specialty.id if d.specialty else None,
+                    'name': d.specialty.name if d.specialty else '',
+                },
+            })
+        return Response(data)
+
+
+class SecProfileView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSecretaire]
+
+    def get(self, request):
+        sec = Secretaire.objects.filter(user=request.user).first()
+        return Response({
+            'bureau':            sec.bureau if sec else '',
+            'telephone_interne': sec.telephone_interne if sec else '',
+            'horaires_service':  sec.horaires_service if sec else '',
+            'photo':             '',
+        })

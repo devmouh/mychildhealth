@@ -131,6 +131,16 @@ class AdminPatientSerializer(serializers.ModelSerializer):
         return f"{obj.parent.first_name} {obj.parent.last_name}"
 
 
+class AdminPatientCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = Patients
+        fields = [
+            'first_name', 'last_name', 'birth_date',
+            'gender', 'groupe_sanguin', 'telephone_parent',
+            'email', 'parent',
+        ]
+
+
 class AdminAppointmentSerializer(serializers.ModelSerializer):
     doctor_name  = serializers.SerializerMethodField()
     patient_name = serializers.SerializerMethodField()
