@@ -1,4 +1,4 @@
-# 🏥 Zamil Full-Stack Healthcare System (نظام زامل للرعاية الصحية)
+# 🏥 my child healthl Full-Stack Healthcare System (نظام my child health للرعاية الصحية)
 
 <p align="center">
   <img src="backendcode/static/img/logo.png" alt="Zamil Logo" height="120">
@@ -14,7 +14,7 @@
 
 # English Documentation
 
-**Zamil** is a premium, secure, and production-ready full-stack hospital and patient management workspace. It seamlessly integrates a cross-platform client app built with **Flutter** for patients and doctors, with a robust backend service engineered using **Django (REST API)** and backed by secure environment configurations.
+**my child health** is a premium, secure, and production-ready full-stack hospital and patient management workspace. It seamlessly integrates a cross-platform client app built with **Flutter** for patients and doctors, with a robust backend service engineered using **Django (REST API)** and backed by secure environment configurations.
 
 ## 🚀 Key Features
 - 🩺 **Doctor Hub:** Manage appointments (approve/cancel), update profiles, write and publish educational medical blogs.
@@ -96,7 +96,7 @@ A GitHub Actions workflow is pre-installed at `.github/workflows/deploy.yml`. Wh
 
 # التوثيق باللغة العربية
 
-**زامل** هو نظام طبي متكامل لإدارة المستشفيات والرواد من الأطباء والمرضى، وهو جاهز تمامًا للإطلاق والإنتاج (Production-Ready). يدمج النظام بين واجهة أمامية متعددة المنصات (هواتف وويب) مطورة بإطار **Flutter**، وبنية خلفية قوية مبنية بـ **Django (REST API)** مع حماية معززة لكلمات المرور وعزل تام لإعدادات البيئة.
+**my child health** هو نظام طبي متكامل لإدارة المستشفيات والرواد من الأطباء والمرضى، وهو جاهز تمامًا للإطلاق والإنتاج (Production-Ready). يدمج النظام بين واجهة أمامية متعددة المنصات (هواتف وويب) مطورة بإطار **Flutter**، وبنية خلفية قوية مبنية بـ **Django (REST API)** مع حماية معززة لكلمات المرور وعزل تام لإعدادات البيئة.
 
 ## 🚀 الميزات الأساسية
 - 🩺 **لوحة الطبيب:** إدارة المواعيد وجدولتها (قبول/إلغاء)، تعديل الملف الشخصي، كتابة ونشر مقالات التثقيف الطبي.
